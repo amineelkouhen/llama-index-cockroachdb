@@ -14,6 +14,7 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
+          cache-dependency-glob: "**/pyproject.toml"
       - name: Sync dev deps
         run: uv sync --all-extras
       - name: Ruff check
@@ -28,17 +29,6 @@ jobs:
       matrix:
         python: ["3.10", "3.11", "3.12"]
         crdb: ["latest-v25.2"]
-    services:
-      cockroach:
-        image: cockroachdb/cockroach:${{ matrix.crdb }}
-        ports:
-          - 26257:26257
-          - 8080:8080
-        options: >-
-          --health-cmd "/cockroach/cockroach sql --insecure -e 'SELECT 1'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 12
     env:
       CRDB_TEST_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
     steps:
@@ -49,14 +39,22 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-      - name: Start cockroach in single-node mode
+          cache-dependency-glob: "**/pyproject.toml"
+      - name: Start CockroachDB
         run: |
-          docker exec ${{ job.services.cockroach.id }} \
-            /cockroach/cockroach start-single-node --insecure --background \
-            --accept-sql-without-tls || true
-          # Service container above is already running; enable vector feature.
-          sudo apt-get install -y postgresql-client
-          psql "$CRDB_TEST_URL" -c "SET CLUSTER SETTING feature.vector_index.enabled = true;"
+          docker run -d --name crdb \
+            -p 26257:26257 -p 8080:8080 \
+            cockroachdb/cockroach:${{ matrix.crdb }} \
+            start-single-node --insecure --accept-sql-without-tls
+          for i in {1..60}; do
+            if docker exec crdb /cockroach/cockroach sql --insecure -e 'SELECT 1' >/dev/null 2>&1; then
+              echo "CockroachDB is up"
+              break
+            fi
+            sleep 1
+          done
+          docker exec crdb /cockroach/cockroach sql --insecure -e \
+            "SET CLUSTER SETTING feature.vector_index.enabled = true;"
       - name: Install package
         run: uv sync --all-extras
       - name: Run tests
