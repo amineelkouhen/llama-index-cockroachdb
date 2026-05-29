@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Sync dev deps
+        run: uv sync --all-extras
+      - name: Ruff check
+        run: uv run ruff check .
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12"]
+        crdb: ["latest-v25.2"]
+    services:
+      cockroach:
+        image: cockroachdb/cockroach:${{ matrix.crdb }}
+        ports:
+          - 26257:26257
+          - 8080:8080
+        options: >-
+          --health-cmd "/cockroach/cockroach sql --insecure -e 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CRDB_TEST_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Start cockroach in single-node mode
+        run: |
+          docker exec ${{ job.services.cockroach.id }} \
+            /cockroach/cockroach start-single-node --insecure --background \
+            --accept-sql-without-tls || true
+          # Service container above is already running; enable vector feature.
+          sudo apt-get install -y postgresql-client
+          psql "$CRDB_TEST_URL" -c "SET CLUSTER SETTING feature.vector_index.enabled = true;"
+      - name: Install package
+        run: uv sync --all-extras
+      - name: Run tests
+        run: uv run pytest --cov=llama_index --cov-report=xml --cov-fail-under=50
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
