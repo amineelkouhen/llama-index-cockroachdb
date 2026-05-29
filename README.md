@@ -1,10 +1,19 @@
 # llama-index-cockroachdb
 
-LlamaIndex integration for [CockroachDB](https://www.cockroachlabs.com/)'s native `VECTOR` column type and the [C-SPANN](https://www.cockroachlabs.com/docs/stable/vector.html) approximate nearest neighbor index. Ships three classes:
+LlamaIndex integration for [CockroachDB](https://www.cockroachlabs.com/)'s native `VECTOR` column type and the [C-SPANN](https://www.cockroachlabs.com/docs/stable/vector.html) approximate nearest neighbor index, plus a full set of storage backends (KV, document, index, chat). Ships seven classes:
+
+Vector / retrieval:
 
 - `CockroachDBVectorStore` (`llama_index.vector_stores.cockroachdb`): drop-in `BasePydanticVectorStore` backed by CRDB.
 - `CockroachDBReader` (`llama_index.readers.cockroachdb`): load existing CRDB rows as LlamaIndex `Document` objects.
 - `CockroachDBRetriever` (`llama_index.retrievers.cockroachdb`): standalone retriever with C-SPANN beam-size tuning.
+
+Storage backends (new in 0.2.0):
+
+- `CockroachDBKVStore` (`llama_index.storage.kvstore.cockroachdb`): generic key-value store, sync + async.
+- `CockroachDBDocumentStore` (`llama_index.storage.docstore.cockroachdb`): persist `Document` / `Node` objects.
+- `CockroachDBIndexStore` (`llama_index.storage.index_store.cockroachdb`): persist `IndexStruct` objects.
+- `CockroachDBChatStore` (`llama_index.storage.chat_store.cockroachdb`): persist `ChatMessage` history per session.
 
 Requires **CockroachDB v25.2+** and Python 3.10+.
 
@@ -109,6 +118,41 @@ retriever = CockroachDBRetriever(
 )
 nodes_with_scores = retriever.retrieve("What is C-SPANN?")
 ```
+
+## Storage backends
+
+Each storage class uses the same `cockroachdb+psycopg2` / `cockroachdb+asyncpg` dialects, so transactions retry automatically on `SERIALIZATION_FAILURE`.
+
+```python
+from llama_index.storage.docstore.cockroachdb import CockroachDBDocumentStore
+from llama_index.storage.index_store.cockroachdb import CockroachDBIndexStore
+from llama_index.storage.chat_store.cockroachdb import CockroachDBChatStore
+from llama_index.core import StorageContext
+
+docstore = CockroachDBDocumentStore.from_params(
+    host="localhost", port=26257, database="defaultdb",
+    user="root", password="", sslmode="disable",
+    table_name="docs",
+)
+index_store = CockroachDBIndexStore.from_params(
+    host="localhost", port=26257, database="defaultdb",
+    user="root", password="", sslmode="disable",
+    table_name="idx",
+)
+chat_store = CockroachDBChatStore.from_params(
+    host="localhost", port=26257, database="defaultdb",
+    user="root", password="", sslmode="disable",
+    table_name="chats",
+)
+
+storage_context = StorageContext.from_defaults(
+    docstore=docstore,
+    index_store=index_store,
+    vector_store=store,
+)
+```
+
+`CockroachDBChatStore` stores each session's messages as a single `JSONB` array (CRDB does not support `ARRAY(JSON)` as a column type). Atomic appends use JSONB concatenation (`||`).
 
 ## Supported query modes
 
